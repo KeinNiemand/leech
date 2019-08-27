@@ -27,7 +27,7 @@ class XenForo(Site):
             SiteSpecificOption(
                 'skip_spoilers',
                 '--skip-spoilers/--include-spoilers',
-                default=True,
+                default=False,
                 help="If true, do not transcribe any tags that are marked as a spoiler."
             ),
             SiteSpecificOption(
@@ -262,7 +262,7 @@ class XenForo(Site):
                 tag.unwrap()
         for tag in post.find_all(class_='quoteExpand'):
             tag.decompose()
-        self._clean_spoilers(post, chapterid)
+        #self._clean_spoilers(post, chapterid)
         return post.prettify()
 
     def _clean_spoilers(self, post, chapterid):
