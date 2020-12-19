@@ -4,6 +4,7 @@ import logging
 import attr
 import datetime
 import json
+import re
 import os.path
 from . import register, Site, Section, Chapter
 
@@ -103,6 +104,12 @@ class Arbitrary(Site):
         if not soup.select(definition.content_selector):
             return chapters
 
+        # clean up a few things which will definitely break epubs:
+        # TODO: expand this greatly, or make it configurable
+        for namespaced in soup.find_all(re.compile(r'[a-z]+:[a-z]+')):
+            # Namespaced elements are going to cause validation errors
+            namespaced.decompose()
+
         for content in soup.select(definition.content_selector):
             if definition.filter_selector:
                 for filtered in content.select(definition.filter_selector):
@@ -111,7 +118,7 @@ class Arbitrary(Site):
             if definition.content_title_selector:
                 title_element = content.select(definition.content_title_selector)
                 if title_element:
-                    title = title_element[0].string
+                    title = title_element[0].get_text().strip()
 
             if definition.content_text_selector:
                 # TODO: multiple text elements?

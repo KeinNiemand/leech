@@ -63,32 +63,32 @@ frontmatter_template = '''<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 
 @attr.s
 class CoverOptions:
-    fontname = attr.ib(default=None, convert=attr.converters.optional(str))
-    fontsize = attr.ib(default=None, convert=attr.converters.optional(int))
-    width = attr.ib(default=None, convert=attr.converters.optional(int))
-    height = attr.ib(default=None, convert=attr.converters.optional(int))
-    wrapat = attr.ib(default=None, convert=attr.converters.optional(int))
-    bgcolor = attr.ib(default=None, convert=attr.converters.optional(tuple))
-    textcolor = attr.ib(default=None, convert=attr.converters.optional(tuple))
-    cover_url = attr.ib(default=None, convert=attr.converters.optional(str))
+    fontname = attr.ib(default=None, converter=attr.converters.optional(str))
+    fontsize = attr.ib(default=None, converter=attr.converters.optional(int))
+    width = attr.ib(default=None, converter=attr.converters.optional(int))
+    height = attr.ib(default=None, converter=attr.converters.optional(int))
+    wrapat = attr.ib(default=None, converter=attr.converters.optional(int))
+    bgcolor = attr.ib(default=None, converter=attr.converters.optional(tuple))
+    textcolor = attr.ib(default=None, converter=attr.converters.optional(tuple))
+    cover_url = attr.ib(default=None, converter=attr.converters.optional(str))
 
 
 def chapter_html(story, titleprefix=None):
     chapters = []
     for i, chapter in enumerate(story):
-        title = chapter.title or '#{}'.format(i)
+        title = chapter.title or f'#{i}'
         if hasattr(chapter, '__iter__'):
             # This is a Section
             chapters.extend(chapter_html(chapter, titleprefix=title))
         else:
-            title = titleprefix and '{}: {}'.format(titleprefix, title) or title
+            title = titleprefix and f'{titleprefix}: {title}' or title
             chapters.append((
                 title,
-                '{}/chapter{}.html'.format(story.id, i + 1),
+                f'{story.id}/chapter{i + 1}.html',
                 html_template.format(title=title, text=chapter.contents)
             ))
     if story.footnotes:
-        chapters.append(("Footnotes", '{}/footnotes.html'.format(story.id), html_template.format(title="Footnotes", text='\n\n'.join(story.footnotes))))
+        chapters.append(("Footnotes", f'{story.id}/footnotes.html', html_template.format(title="Footnotes", text='\n\n'.join(story.footnotes))))
     return chapters
 
 
@@ -109,7 +109,7 @@ def generate_epub(story, cover_options={}, output_filename=None):
     # The cover is static, and the only change comes from the image which we generate
     html = [('Cover', 'cover.html', cover_template)]
 
-    if cover_options and cover_options["cover_url"]:
+    if cover_options and "cover_url" in cover_options:
         image = make_cover_from_url(cover_options["cover_url"], story.title, story.author)
     elif story.cover_url:
         image = make_cover_from_url(story.cover_url, story.title, story.author)

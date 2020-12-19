@@ -4,7 +4,7 @@ import datetime
 import logging
 
 from . import register, Section, SiteException
-from .xenforo import XenForo
+from .xenforo import XenForo, XenForoIndex
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class XenForo2(XenForo):
                     link.string = spoiler_title.get_text()
             else:
                 if spoiler_title:
-                    link = '[SPOILER: {}]'.format(spoiler_title.get_text())
+                    link = f'[SPOILER: {spoiler_title.get_text()}]'
                 else:
                     link = '[SPOILER]'
             new_spoiler = self._new_tag('div')
@@ -55,6 +55,16 @@ class XenForo2(XenForo):
         if post.find('time'):
             return datetime.datetime.fromtimestamp(int(post.find('time').get('data-time')))
         raise SiteException("No date")
+
+
+@register
+class SpaceBattles(XenForo2):
+    domain = 'forums.spacebattles.com'
+
+
+@register
+class SpaceBattlesIndex(SpaceBattles, XenForoIndex):
+    _key = "SpaceBattles"
 
 
 @register

@@ -15,14 +15,14 @@ class FictionLive(Site):
     @staticmethod
     def matches(url):
         # e.g. https://fiction.live/stories/Descendant-of-a-Demon-Lord/SBBA49fQavNQMWxFT
-        match = re.match(r'^(https?://fiction\.live/stories/[^\/]+/[0-9a-zA-Z]+)/?.*', url)
+        match = re.match(r'^(https?://fiction\.live/(?:stories|Sci-fi)/[^\/]+/[0-9a-zA-Z\-]+)/?.*', url)
         if match:
             return match.group(1)
 
     def extract(self, url):
-        workid = re.match(r'^https?://fiction\.live/stories/[^\/]+/([0-9a-zA-Z]+)/?.*', url).group(1)
+        workid = re.match(r'^https?://fiction\.live/(?:stories|Sci-fi)/[^\/]+/([0-9a-zA-Z\-]+)/?.*', url).group(1)
 
-        response = self.session.get('https://fiction.live/api/node/{}'.format(workid)).json()
+        response = self.session.get(f'https://fiction.live/api/node/{workid}').json()
 
         story = Section(
             title=response['t'],
@@ -42,7 +42,7 @@ class FictionLive(Site):
             # https://fiction.live/api/anonkun/chapters/SBBA49fQavNQMWxFT/1449266444062/1449615394752
             # https://fiction.live/api/anonkun/chapters/SBBA49fQavNQMWxFT/1502823848216/9999999999999998
             # i.e. format is [current timestamp] / [next timestamp - 1]
-            chapter_url = 'https://fiction.live/api/anonkun/chapters/{}/{}/{}'.format(workid, currc['ct'], nextc['ct'] - 1)
+            chapter_url = f'https://fiction.live/api/anonkun/chapters/{workid}/{currc["ct"]}/{nextc["ct"] - 1}'
             logger.info("Extracting chapter \"%s\" @ %s", currc['title'], chapter_url)
             data = self.session.get(chapter_url).json()
             html = []
@@ -52,23 +52,40 @@ class FictionLive(Site):
                 updated = max(updated, segment['ct'])
                 # TODO: work out if this is actually enough types handled
                 # There's at least also a reader post type, which mostly seems to be used for die rolls.
-                if segment['nt'] == 'chapter':
-                    html.extend(('<div>', segment['b'].replace('<br>', '<br/>'), '</div>'))
-                elif segment['nt'] == 'choice':
-                    votes = {}
-                    for vote in segment['votes']:
-                        votechoices = segment['votes'][vote]
-                        if type(votechoices) == int:
-                            votechoices = (votechoices,)
-                        for choice in votechoices:
-                            choice = segment['choices'][int(choice)]
-                            votes[choice] = votes.get(choice, 0) + 1
-                    choices = [(votes[v], v) for v in votes]
-                    choices.sort(reverse=True)
-                    html.append('<hr/><ul>')
-                    for votecount, choice in choices:
-                        html.append('<li>{}: {}</li>'.format(choice, votecount))
-                    html.append('</ul><hr/>')
+                try:
+                    if segment['nt'] == 'chapter':
+                        html.extend(('<div>', segment['b'].replace('<br>', '<br/>'), '</div>'))
+                    elif segment['nt'] == 'choice':
+                        if 'votes' not in segment:
+                            # Somehow, sometime, we end up with a choice without votes (or choices)
+                            continue
+                        votes = {}
+                        for vote in segment['votes']:
+                            votechoices = segment['votes'][vote]
+                            if type(votechoices) == str:
+                                # This caused issue #30, where for some reason one
+                                # choice on a story was a string rather than an
+                                # index into the choices array.
+                                continue
+                            if type(votechoices) == int:
+                                votechoices = (votechoices,)
+                            for choice in votechoices:
+                                if int(choice) < len(segment['choices']):
+                                    # sometimes someone has voted for a presumably-deleted choice
+                                    choice = segment['choices'][int(choice)]
+                                    votes[choice] = votes.get(choice, 0) + 1
+                        choices = [(votes[v], v) for v in votes]
+                        choices.sort(reverse=True)
+                        html.append('<hr/><ul>')
+                        for votecount, choice in choices:
+                            html.append(f'<li>{choice}: {votecount}</li>')
+                        html.append('</ul><hr/>')
+                    elif segment['nt'] == 'readerPost':
+                        pass
+                    else:
+                        logger.info("Skipped chapter-segment of unhandled type: %s", segment['nt'])
+                except Exception as e:
+                    logger.error("Skipped chapter-segment due to parsing error", exc_info=e)
 
             story.add(Chapter(
                 title=currc['title'],

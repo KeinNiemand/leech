@@ -23,7 +23,7 @@ class Chapter:
     title = attr.ib()
     contents = attr.ib()
     date = attr.ib(default=False)
-    id = attr.ib(default=attr.Factory(_default_uuid_string), convert=str)
+    id = attr.ib(default=attr.Factory(_default_uuid_string), converter=str)
 
 
 @attr.s
@@ -32,7 +32,7 @@ class Section:
     author = attr.ib()
     url = attr.ib()
     cover_url = attr.ib(default='')
-    id = attr.ib(default=attr.Factory(_default_uuid_string), convert=str)
+    id = attr.ib(default=attr.Factory(_default_uuid_string), converter=str)
     contents = attr.ib(default=attr.Factory(list))
     footnotes = attr.ib(default=attr.Factory(list))
     summary = attr.ib(default='')
@@ -164,14 +164,14 @@ class Site:
         # epub spec footnotes are all about epub:type on the footnote and the link
         # http://www.idpf.org/accessibility/guidelines/content/semantics/epub-type.php
         contents.name = 'div'
-        contents.attrs['id'] = "footnote{}".format(idx)
+        contents.attrs['id'] = f'footnote{idx}'
         contents.attrs['epub:type'] = 'rearnote'
 
         # a backlink is essential for Kindle to think of this as a footnote
         # otherwise it doesn't get the inline-popup treatment
         # http://kindlegen.s3.amazonaws.com/AmazonKindlePublishingGuidelines.pdf
         # section 3.9.10
-        backlink = self._new_tag('a', href="chapter{}.html#noteback{}".format(chapterid, idx))
+        backlink = self._new_tag('a', href=f'chapter{chapterid}.html#noteback{idx}')
         backlink.string = '^'
         contents.insert(0, backlink)
 
@@ -181,8 +181,8 @@ class Site:
         # epub annotations.
         spoiler_link = self._new_tag('a')
         spoiler_link.attrs = {
-            'id': 'noteback{}'.format(idx),
-            'href': "footnotes.html#footnote{}".format(idx),
+            'id': f'noteback{idx}',
+            'href': f'footnotes.html#footnote{idx}',
             'epub:type': 'noteref',
         }
         spoiler_link.string = str(idx)
