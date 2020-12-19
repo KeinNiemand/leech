@@ -72,4 +72,4 @@ class RoyalRoad(Site):
 
 @register
 class RoyalRoadL(RoyalRoad):
-    domain = 'royalroadl'
+    domain = 'royalroadldl'
