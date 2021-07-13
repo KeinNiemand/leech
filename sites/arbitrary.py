@@ -85,6 +85,8 @@ class Arbitrary(Site):
                     next_link = soup.select(definition.next_selector)
                     if next_link:
                         next_link_url = str(next_link[0].get('href'))
+                        next_link_url = next_link_url.replace("www.reddit.com", "old.reddit.com")
+                        next_link_url = next_link_url.replace("redd.it", "old.reddit.com")
                         if base:
                             next_link_url = self._join_url(base, next_link_url)
                         content_url = self._join_url(content_url, next_link_url)
