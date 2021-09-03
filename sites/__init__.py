@@ -2,6 +2,7 @@
 import click
 import glob
 import os
+import random
 import uuid
 import time
 import logging
@@ -14,8 +15,9 @@ logger.addHandler(logging.NullHandler())
 _sites = []
 
 
-def _default_uuid_string(*args):
-    return str(uuid.uuid4())
+def _default_uuid_string(self):
+    rd = random.Random(x=self.url)
+    return str(uuid.UUID(int=rd.getrandbits(8*16), version=4))
 
 
 @attr.s
@@ -23,7 +25,6 @@ class Chapter:
     title = attr.ib()
     contents = attr.ib()
     date = attr.ib(default=False)
-    id = attr.ib(default=attr.Factory(_default_uuid_string), converter=str)
 
 
 @attr.s
@@ -32,9 +33,10 @@ class Section:
     author = attr.ib()
     url = attr.ib()
     cover_url = attr.ib(default='')
-    id = attr.ib(default=attr.Factory(_default_uuid_string), converter=str)
+    id = attr.ib(default=attr.Factory(_default_uuid_string, takes_self=True), converter=str)
     contents = attr.ib(default=attr.Factory(list))
     footnotes = attr.ib(default=attr.Factory(list))
+    tags = attr.ib(default=attr.Factory(list))
     summary = attr.ib(default='')
 
     def __iter__(self):
@@ -134,17 +136,21 @@ class Site:
     def login(self, login_details):
         raise NotImplementedError()
 
-    def _soup(self, url, method='html5lib', retry=3, retry_delay=10, **kw):
+    def _soup(self, url, method='html5lib', delay=0, retry=3, retry_delay=10, **kw):
         page = self.session.get(url, **kw)
         if not page:
+            if page.status_code == 403 and page.headers.get('Server', False) == 'cloudflare' and "captcha-bypass" in page.text:
+                raise CloudflareException("Couldn't fetch, probably because of Cloudflare protection", url)
             if retry and retry > 0:
-                delay = retry_delay
+                real_delay = retry_delay
                 if 'Retry-After' in page.headers:
-                    delay = int(page.headers['Retry-After'])
-                logger.warning("Load failed: waiting %s to retry (%s: %s)", delay, page.status_code, page.url)
-                time.sleep(delay)
+                    real_delay = int(page.headers['Retry-After'])
+                logger.warning("Load failed: waiting %s to retry (%s: %s)", real_delay, page.status_code, page.url)
+                time.sleep(real_delay)
                 return self._soup(url, method=method, retry=retry - 1, retry_delay=retry_delay, **kw)
             raise SiteException("Couldn't fetch", url)
+        if delay and delay > 0 and not page.from_cache:
+            time.sleep(delay)
         return BeautifulSoup(page.text, method)
 
     def _new_tag(self, *args, **kw):
@@ -189,6 +195,22 @@ class Site:
 
         return spoiler_link
 
+    def _clean(self, contents):
+        """Clean up story content to be more ebook-friendly
+
+        TODO: this expects a soup as its argument, so the couple of API-driven sites can't use it as-is
+        """
+        # Cloudflare is used on many sites, and mangles things that look like email addresses
+        # e.g. Point_Me_@_The_Sky becomes
+        # <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="85d5eaecebf1dac8e0dac5">[email&#160;protected]</a>_The_Sky
+        for a in contents.find_all('a', class_='__cf_email__', href='/cdn-cgi/l/email-protection'):
+            # See: https://usamaejaz.com/cloudflare-email-decoding/
+            enc = bytes.fromhex(a['data-cfemail'])
+            email = bytes([c ^ enc[0] for c in enc[1:]]).decode('utf8')
+            a.insert_before(email)
+            a.decompose()
+        return contents
+
 
 @attr.s(hash=True)
 class SiteSpecificOption:
@@ -217,6 +239,10 @@ class SiteSpecificOption:
 
 
 class SiteException(Exception):
+    pass
+
+
+class CloudflareException(SiteException):
     pass
 
 

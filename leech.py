@@ -45,7 +45,7 @@ def create_session(cache):
         # This file is very much optional, so this log isn't really necessary
         # logging.exception("Couldn't load cookies from leech.cookies")
         pass
-    session.cookies = lwp_cookiejar
+    session.cookies.update(lwp_cookiejar)
     session.headers.update({
         'User-agent': USER_AGENT
     })
@@ -100,7 +100,11 @@ def open_story(site, url, session, login, options):
     if login:
         handler.login(login)
 
-    story = handler.extract(url)
+    try:
+        story = handler.extract(url)
+    except sites.SiteException as e:
+        logger.error(e.args)
+        return
     if not story:
         raise Exception("Couldn't extract story")
     return story
@@ -140,9 +144,10 @@ def flush(verbose):
     help='JSON object encoding any site specific option.'
 )
 @click.option('--cache/--no-cache', default=True)
+@click.option('--normalize/--no-normalize', default=True, help="Whether to normalize strange unicode text")
 @click.option('--verbose', '-v', is_flag=True, help="Verbose debugging output")
 @site_specific_options  # Includes other click.options specific to sites
-def download(url, site_options, cache, verbose, **other_flags):
+def download(url, site_options, cache, verbose, normalize, **other_flags):
     """Downloads a story and saves it on disk as a ebpub ebook."""
     configure_logging(verbose)
     session = create_session(cache)
@@ -150,9 +155,11 @@ def download(url, site_options, cache, verbose, **other_flags):
     site, url = sites.get(url)
     options, login = create_options(site, site_options, other_flags)
     story = open_story(site, url, session, login, options)
-
-    filename = ebook.generate_epub(story, options)
-    logger.info("File created: " + filename)
+    if story:
+        filename = ebook.generate_epub(story, options, normalize=normalize)
+        logger.info("File created: " + filename)
+    else:
+        logger.warning("No ebook created")
 
 
 if __name__ == '__main__':
