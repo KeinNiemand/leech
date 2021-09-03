@@ -58,3 +58,6 @@ coverage.xml
 
 # Sphinx documentation
 docs/_build/
+/.vs/Leech.py/v16/.suo
+/.vs/slnx.sqlite
+/.vs/VSWorkspaceState.json
