@@ -6,7 +6,7 @@ Let's say you want to read some sort of fiction. You're a fan of it, perhaps. Bu
 Setup
 ---
 
-You need Python 3.6+ and poetry.
+You need Python 3.7+ and poetry.
 
 My recommended setup process is:
 
@@ -67,6 +67,12 @@ Example:
         "bgcolor": [20, 120, 20],
         "textcolor": [180, 20, 180],
         "cover_url": "https://website.com/image.png"
+    },
+    "output_dir": "/tmp/ebooks",
+    "site_options": {
+        "RoyalRoad": {
+            "output_dir": "/tmp/litrpg_isekai_trash"
+        }
     }
 }
 ```
