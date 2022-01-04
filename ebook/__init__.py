@@ -54,8 +54,6 @@ frontmatter_template = '''<?xml version="1.0" encoding="UTF-8" standalone="no"?>
         <dd>{started:%Y-%m-%d}</dd>
         <dt>Updated</dt>
         <dd>{updated:%Y-%m-%d}</dd>
-        <dt>Downloaded on</dt>
-        <dd>{now:%Y-%m-%d}</dd>
         {extra}
     </dl>
 </div>
