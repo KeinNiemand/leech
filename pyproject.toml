@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "leech"
-version = "1.1.0"
+version = "1.2.0"
 description = "Turn a story on certain websites into an ebook for convenient reading"
 authors = ["David Lynch <kemayo@gmail.com>"]
 license = "MIT License"
