@@ -69,6 +69,12 @@ class XenForo(Site):
 
         story = self._base_story(soup)
 
+        threadmark_categories = {}
+        # Note to self: in the source this is data-categoryId, but the parser
+        # in bs4 lowercases tags and attributes...
+        for cat in soup.find_all('a', attrs={'data-categoryid': True}):
+            threadmark_categories[int(cat['data-categoryid'])] = cat['title']
+
         if url.endswith('/reader'):
             reader_url = url
         elif soup.find('a', class_='readerToggle'):
@@ -80,6 +86,11 @@ class XenForo(Site):
             reader_url = False
 
         if reader_url:
+            match = re.search(r'\d+/(\d+)/reader', reader_url)
+            if match:
+                cat = int(match.group(1))
+                if cat != 1 and cat in threadmark_categories:
+                    story.title = f'{story.title} ({threadmark_categories[cat]})'
             idx = 0
             while reader_url:
                 reader_url = self._join_url(base, reader_url)
@@ -280,7 +291,7 @@ class XenForo(Site):
                     link = f'[SPOILER: {spoiler_title.get_text()}]'
                 else:
                     link = '[SPOILER]'
-            new_spoiler = self._new_tag('div')
+            new_spoiler = self._new_tag('div', class_="leech-spoiler")
             new_spoiler.append(link)
             spoiler.replace_with(new_spoiler)
 
