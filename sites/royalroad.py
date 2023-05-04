@@ -93,18 +93,31 @@ class RoyalRoad(Site):
         return content, updated
 
     def _clean_spoilers(self, content, chapterid):
-        # Spoilers to footnotes
-        for spoiler in content.find_all(class_=('spoiler-new')):
-            spoiler_title = spoiler.get('data-caption')
-            if self.options['skip_spoilers']:
-                link = self._footnote(spoiler, chapterid)
-                if spoiler_title:
-                    link.string = spoiler_title
-            else:
-                link = spoiler_title and f'[SPOILER: {spoiler_title}]' or '[SPOILER]'
-            new_spoiler = self._new_tag('div', class_="leech-spoiler")
-            new_spoiler.append(link)
-            spoiler.replace_with(new_spoiler)
+     # Display spoilers inline without spoiler tags, and just add a spoiler header
+     for spoiler in content.find_all(class_='spoiler'):
+        spoiler_title = spoiler.find('div', class_='smalltext').get_text(strip = True)
+        if (not spoiler_title):
+            spoiler_title = ' '
+        spoiler_header = '[SPOILER - ' + spoiler_title + ']'
+        spoiler_header_tag = self._new_tag('strong', class_='spoiler-header')
+        spoiler_header_tag.string = spoiler_header
+
+        # Locate the spoiler content div
+        spoiler_content = spoiler.find('div', class_='spoilerContent')
+        if spoiler_content:
+            spoiler_inner = spoiler_content.find('div', class_='spoiler-inner')
+            if spoiler_inner:
+                # Insert the spoiler header before the spoiler content
+                spoiler.insert_before(spoiler_header_tag)
+                spoiler_header_tag.insert_after(spoiler_inner)
+                spoiler_inner['style'] = ''
+
+                # Remove the spoiler wrapper and other unnecessary elements
+                for tag_to_remove in spoiler.find_all(['div', 'input']):
+                    tag_to_remove.extract()
+
+                # Remove the remaining spoiler div
+                spoiler.extract()
 
 
 @register
