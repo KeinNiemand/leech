@@ -22,6 +22,18 @@ class RoyalRoad(Site):
                 default=True,
                 help="If true, do not transcribe any tags that are marked as a spoiler."
             ),
+            SiteSpecificOption(
+                'offset',
+                '--offset',
+                type=int,
+                help="The chapter index to start in the chapter marks."
+            ),
+            SiteSpecificOption(
+                'limit',
+                '--limit',
+                type=int,
+                help="The chapter to end at at in the chapter marks."
+            ),
         ]
 
     """Royal Road: a place where people write novels, mostly seeming to be light-novel in tone."""
@@ -51,7 +63,11 @@ class RoyalRoad(Site):
             tags=[tag.get_text().strip() for tag in soup.select('span.tags a.fiction-tag')]
         )
 
-        for chapter in soup.select('#chapters tbody tr[data-url]'):
+        for index, chapter in enumerate(soup.select('#chapters tbody tr[data-url]')):
+            if self.options['offset'] and index < self.options['offset']:
+                continue
+            if self.options['limit'] and index >= self.options['limit']:
+                continue
             chapter_url = str(self._join_url(story.url, str(chapter.get('data-url'))))
 
             contents, updated = self._chapter(chapter_url, len(story) + 1)
@@ -70,7 +86,7 @@ class RoyalRoad(Site):
         soup = self._soup(url)
         content = soup.find('div', class_='chapter-content')
 
-        self._clean(content)
+        self._clean(content, soup)
         self._clean_spoilers(content, chapterid)
 
         content = str(content)
@@ -91,6 +107,19 @@ class RoyalRoad(Site):
         )
 
         return content, updated
+
+    def _clean(self, contents, full_page):
+        contents = super()._clean(contents)
+
+        # Royalroad has started inserting "this was stolen" notices into its
+        # HTML, and hiding them with CSS. Currently the CSS is very easy to
+        # find, so do so and filter them out.
+        for style in full_page.find_all('style'):
+            if m := re.match(r'\s*\.(\w+)\s*{[^}]*display:\s*none;[^}]*}', style.string):
+                for warning in contents.find_all(class_=m.group(1)):
+                    warning.decompose()
+
+        return contents
 
     def _clean_spoilers(self, content, chapterid):
      # Display spoilers inline without spoiler tags, and just add a spoiler header
