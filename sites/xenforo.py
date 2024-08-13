@@ -3,6 +3,7 @@
 import datetime
 import re
 import logging
+import requests_cache
 from bs4 import BeautifulSoup
 
 from . import register, Site, SiteException, SiteSpecificOption, Section, Chapter
@@ -60,13 +61,22 @@ class XenForo(Site):
         return f'https://{self.domain}/{path}'
 
     def login(self, login_details):
-        # Todo: handle non-https?
-        post = {
-            'login': login_details[0],
-            'password': login_details[1],
-        }
-        self.session.post(self.siteurl('login/login'), data=post)
-        logger.info("Logged in as %s", login_details[0])
+        with requests_cache.disabled():
+            login = self.session.get(self.siteurl('login/'))
+            soup = BeautifulSoup(login.text, 'html5lib')
+            post, action, method = self._form_data(soup.find(class_='p-body-content'))
+            post['login'] = login_details[0]
+            post['password'] = login_details[1]
+            # I feel the session *should* handle this cookies bit for me. But
+            # it doesn't. And I don't know why.
+            result = self.session.post(
+                self._join_url(login.url, action),
+                data=post, cookies=login.cookies
+            )
+            if result.ok:
+                logger.info("Logged in as %s", login_details[0])
+            else:
+                logger.error("Failed to log in as %s", login_details[0])
 
     def extract(self, url):
         soup = self._soup(url)
@@ -322,16 +332,6 @@ class XenForoIndex(XenForo):
 
     def _chapter_list(self, url):
         return self._chapter_list_index(url)
-
-
-@register
-class QuestionableQuesting(XenForo):
-    domain = 'forum.questionablequesting.com'
-
-
-@register
-class QuestionableQuestingIndex(QuestionableQuesting, XenForoIndex):
-    _key = "QuestionableQuesting"
 
 
 @register
