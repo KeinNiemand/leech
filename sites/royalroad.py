@@ -17,12 +17,6 @@ class RoyalRoad(Site):
     def get_site_specific_option_defs():
         return Site.get_site_specific_option_defs() + [
             SiteSpecificOption(
-                'skip_spoilers',
-                '--skip-spoilers/--include-spoilers',
-                default=True,
-                help="If true, do not transcribe any tags that are marked as a spoiler."
-            ),
-            SiteSpecificOption(
                 'offset',
                 '--offset',
                 type=int,
@@ -36,20 +30,25 @@ class RoyalRoad(Site):
             ),
         ]
 
+    @classmethod
+    def get_default_options(cls):
+        return {**super().get_default_options(), 'spoilers': 'inline'}
+
     """Royal Road: a place where people write novels, mostly seeming to be light-novel in tone."""
     @classmethod
     def matches(cls, url):
         # e.g. https://royalroad.com/fiction/6752/lament-of-the-fallen
+        # Note: urls like https://www.royalroad.com/fiction/chapter/2330878 also exist, which it
+        # might be nice to support, but I need to look into an API call to get the work ID from
+        # a chapter ID.
         match = re.match(r'^(https?://(?:www\.)?%s\.com/fiction/\d+)/?.*' % cls.domain, url)
         if match:
             return match.group(1) + '/'
 
     def extract(self, url):
         workid = re.match(r'^https?://(?:www\.)?%s\.com/fiction/(\d+)/?.*' % self.domain, url).group(1)
-        soup = self._soup(f'https://www.{self.domain}.com/fiction/{workid}')
+        soup, base = self._soup(f'https://www.{self.domain}.com/fiction/{workid}')
         # should have gotten redirected, for a valid title
-
-        base = soup.head.base and soup.head.base.get('href') or url
 
         original_maxheaders = http.client._MAXHEADERS
         http.client._MAXHEADERS = 1000
@@ -76,17 +75,16 @@ class RoyalRoad(Site):
 
         http.client._MAXHEADERS = original_maxheaders
 
-        story.footnotes = self.footnotes
-        self.footnotes = []
+        self._finalize(story)
 
         return story
 
     def _chapter(self, url, chapterid):
         logger.info("Extracting chapter @ %s", url)
-        soup = self._soup(url)
+        soup, base = self._soup(url)
         content = soup.find('div', class_='chapter-content')
 
-        self._clean(content, soup)
+        self._clean(content, full_page=soup, base=base)
         self._clean_spoilers(content, chapterid)
 
         content = str(content)
@@ -108,8 +106,8 @@ class RoyalRoad(Site):
 
         return content, updated
 
-    def _clean(self, contents, full_page):
-        contents = super()._clean(contents)
+    def _clean(self, contents, full_page, base=False):
+        contents = super()._clean(contents, base=base)
 
         # Royalroad has started inserting "this was stolen" notices into its
         # HTML, and hiding them with CSS. Currently the CSS is very easy to
@@ -122,31 +120,37 @@ class RoyalRoad(Site):
         return contents
 
     def _clean_spoilers(self, content, chapterid):
-     # Display spoilers inline without spoiler tags, and just add a spoiler header
-     for spoiler in content.find_all(class_='spoiler'):
-        spoiler_title = spoiler.find('div', class_='smalltext').get_text(strip = True)
-        if (not spoiler_title):
-            spoiler_title = ' '
-        spoiler_header = '[SPOILER - ' + spoiler_title + ']'
-        spoiler_header_tag = self._new_tag('strong', class_='spoiler-header')
-        spoiler_header_tag.string = spoiler_header
+        for spoiler in content.find_all(class_='spoiler-new'):
+            spoiler_title = spoiler.get('data-caption')
+            new_spoiler = self._new_tag('div', class_="leech-spoiler")
+            if self.options['spoilers'] == 'skip':
+                new_spoiler.append(spoiler_title and f'[SPOILER: {spoiler_title}]' or '[SPOILER]')
+            elif self.options['spoilers'] == 'inline':
+                if spoiler_title:
+                    new_spoiler.append(f"{spoiler_title}: ")
+                new_spoiler.append(spoiler)
+            else:
+                link = self._footnote(spoiler, chapterid)
+                if spoiler_title:
+                    link.string = spoiler_title
+                new_spoiler.append(link)
+            spoiler.replace_with(new_spoiler)
 
-        # Locate the spoiler content div
-        spoiler_content = spoiler.find('div', class_='spoilerContent')
-        if spoiler_content:
-            spoiler_inner = spoiler_content.find('div', class_='spoiler-inner')
-            if spoiler_inner:
-                # Insert the spoiler header before the spoiler content
-                spoiler.insert_before(spoiler_header_tag)
-                spoiler_header_tag.insert_after(spoiler_inner)
-                spoiler_inner['style'] = ''
-
-                # Remove the spoiler wrapper and other unnecessary elements
-                for tag_to_remove in spoiler.find_all(['div', 'input']):
-                    tag_to_remove.extract()
-
-                # Remove the remaining spoiler div
-                spoiler.extract()
+        for spoiler in content.find_all(class_='spoiler'):
+            spoiler_title = spoiler.find('div', class_='smalltext')
+            spoiler_header = f"[SPOILER - {spoiler_title.get_text(strip=True) if spoiler_title else ' '}]"
+            spoiler_header_tag = self._new_tag('strong', class_='spoiler-header')
+            spoiler_header_tag.string = spoiler_header
+            spoiler_content = spoiler.find('div', class_='spoilerContent')
+            if spoiler_content:
+                spoiler_inner = spoiler_content.find('div', class_='spoiler-inner')
+                if spoiler_inner:
+                    spoiler.insert_before(spoiler_header_tag)
+                    spoiler_header_tag.insert_after(spoiler_inner)
+                    spoiler_inner['style'] = ''
+                    for tag_to_remove in spoiler.find_all(['div', 'input']):
+                        tag_to_remove.extract()
+                    spoiler.extract()
 
 
 @register

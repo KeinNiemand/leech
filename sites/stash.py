@@ -18,7 +18,7 @@ class Stash(Site):
             return match.group(1) + '/'
 
     def extract(self, url):
-        soup = self._soup(url)
+        soup, base = self._soup(url)
         content = soup.find(id="stash-body")
         if not content:
             return
@@ -40,11 +40,13 @@ class Stash(Site):
             except Exception:
                 logger.exception("Couldn't extract chapters from thumbs")
 
+        self._finalize(story)
+
         return story
 
     def _chapter(self, url):
         logger.info("Fetching chapter @ %s", url)
-        soup = self._soup(url)
+        soup, base = self._soup(url)
 
         content = soup.find(class_="journal-wrapper")
         if not content:
@@ -62,9 +64,9 @@ class Stash(Site):
         except Exception as e:
             raise SiteException("Trouble cleaning attributes", e)
 
-        self._clean(text)
+        self._clean(text, base)
 
-        return Chapter(title=title, contents=text.prettify(), date=self._date(soup))
+        return Chapter(title=title, contents=self._soup_contents(text), date=self._date(soup))
 
     def _date(self, soup):
         maybe_date = soup.find('div', class_="dev-metainfo-details").find('span', ts=True)

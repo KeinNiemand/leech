@@ -19,7 +19,7 @@ class DeviantArt(Stash):
             return match.group(0) + '/'
 
     def extract(self, url):
-        soup = self._soup(url)
+        soup, base = self._soup(url)
         content = soup.find(id="output")
         if not content:
             return
@@ -45,5 +45,7 @@ class DeviantArt(Stash):
                     story.add(self._chapter(thumb['href']))
             except Exception:
                 logger.exception("Couldn't extract chapters from thumbs")
+
+        self._finalize(story)
 
         return story

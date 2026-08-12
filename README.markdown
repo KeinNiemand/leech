@@ -6,34 +6,37 @@ Let's say you want to read some sort of fiction. You're a fan of it, perhaps. Bu
 Setup
 ---
 
-You need Python 3.7+ and poetry.
+You need Python 3.10+.
 
-My recommended setup process is:
+Make sure the dependencies from `pyproject.toml` get installed somehow.
 
-    $ pip install poetry
-    $ poetry install
-    $ poetry shell
+The `pyproject.toml` exposes a `script` called `leech`, so all subsequent commands can be run through a dependency manager's local environment. E.g.
 
-...adjust as needed. Just make sure the dependencies from `pyproject.toml` get installed somehow.
+    $ uv run leech [[URL]]
+    $ poetry run leech [[URL]]
 
 Usage
 ---
 
 Basic
 
-    $ python3 leech.py [[URL]]
+    $ ./leech.py [[URL]]
 
 A new file will appear named `Title of the Story.epub`.
 
 This is equivalent to the slightly longer
 
-    $ python3 leech.py download [[URL]]
+    $ ./leech.py download [[URL]]
 
 Flushing the cache
 
-    $ python3 leech.py flush
+    $ ./leech.py flush
 
-If you want to put it on a Kindle you'll have to convert it. I'd recommend [Calibre](http://calibre-ebook.com/), though you could also try using [kindlegen](http://www.amazon.com/gp/feature.html?docId=1000765211) directly.
+Learn about other options
+
+    $ ./leech.py --help
+
+If you want to put an ePub on a Kindle you'll have to either use Amazon's send-to-kindle tools or convert it. For the latter I'd recommend [Calibre](http://calibre-ebook.com/), though you could also try using [kindlegen](http://www.amazon.com/gp/feature.html?docId=1000765211) directly.
 
 Supports
 ---
@@ -45,6 +48,8 @@ Supports
  * Various XenForo-based sites: SpaceBattles and SufficientVelocity, most notably
  * RoyalRoad
  * Fiction.live (Anonkun)
+ * WattPad
+ * Patreon
  * DeviantArt galleries/collections
  * Sta.sh
  * Completely arbitrary sites, with a bit more work (see below)
@@ -61,6 +66,13 @@ Example:
     "logins": {
         "QuestionableQuesting": ["username", "password"]
     },
+    "images": {
+        "image_fetch": true,
+        "image_format": "png",
+        "compress_images": true,
+        "max_image_size": 100000,
+        "always_convert_images": true
+    },
     "cover": {
         "fontname": "Comic Sans MS",
         "fontsize": 30,
@@ -69,13 +81,41 @@ Example:
         "cover_url": "https://website.com/image.png"
     },
     "output_dir": "/tmp/ebooks",
+    "user_agent": "Something Completely Custom/1.0",
     "site_options": {
         "RoyalRoad": {
-            "output_dir": "/tmp/litrpg_isekai_trash"
+            "output_dir": "/tmp/litrpg_isekai_trash",
+            "image_fetch": false
         }
     }
 }
 ```
+> Note: The `image_fetch` key is a boolean and can only be `true` or `false`. Booleans in JSON are written in lowercase.
+> If it is `false`, Leech will not download any images.
+> Leech will also ignore the `image_format` key if `images` is `false`.
+
+> Note: If the `image_format` key does not exist, Leech will default to `jpeg`.
+> The three image formats are `jpeg`, `png`, and `gif`. The `image_format` key is case-insensitive.
+
+> Note: The `compress_images` key tells Leech to compress images. This is only supported for `jpeg` and `png` images.
+> This also goes hand-in-hand with the `max_image_size` key. If the `compress_images` key is `true` but there's no `max_image_size` key,
+> Leech will compress the image to a size less than 1MB (1000000 bytes). If the `max_image_size` key is present, Leech will compress the image
+> to a size less than the value of the `max_image_size` key. The `max_image_size` key is in bytes.
+> If `compress_images` is `false`, Leech will ignore the `max_image_size` key.
+
+> Warning: Compressing images might make Leech take a lot longer to download images.
+
+> Warning: Compressing images might make the image quality worse.
+
+> Warning: `max_image_size` is not a hard limit. Leech will try to compress the image to the size of the `max_image_size` key, but Leech might
+> not be able to compress the image to the exact size of the `max_image_size` key.
+
+> Warning: `max_image_size` should not be too small. For instance, if you set `max_image_size` to 1000, Leech will probably not be able to
+> compress the image to 1000 bytes. If you set `max_image_size` to 1000000, Leech will probably be able to compress the image to 1000000 bytes.
+
+> Warning: Leech will not compress GIFs, that might damage the animation.
+
+> Note: if `always_convert_images` is `true`, Leech will convert all non-GIF images to the specified `image_format`.
 
 Arbitrary Sites
 ---
@@ -128,10 +168,28 @@ If multiple matches for `content_selector` are found, leech will assume multiple
 
 If you need more advanced behavior, consider looking at...
 
-Adding new site handers
+Adding new site handlers
 ---
 
 To add support for a new site, create a file in the `sites` directory that implements the `Site` interface. Take a look at `ao3.py` for a minimal example of what you have to do.
+
+Images support
+---
+
+Leech creates EPUB 2.01 files, which means that Leech can only save images in the following
+format:
+- JPEG (JPG/JFIF)
+- PNG
+- GIF
+
+See the [Open Publication Structure (OPS) 2.0.1](https://idpf.org/epub/20/spec/OPS_2.0.1_draft.htm#TOC2.3.4) for more information.
+
+Leech can not save images in SVG because it is not supported by Pillow.
+
+Leech uses [Pillow](https://pillow.readthedocs.io/en/stable/index.html) for image manipulation and conversion. If you want to use a different
+image format, you can install the required dependencies for Pillow and you will probably have to tinker with Leech. See the [Pillow documentation](https://pillow.readthedocs.io/en/stable/installation.html#external-libraries) for more information.
+
+To configure image support, you will need to create a file called `leech.json`. See the section below for more information.
 
 Docker
 ---
@@ -152,5 +210,9 @@ Contributing
 ---
 
 If you submit a pull request to add support for another reasonably-general-purpose site, I will nigh-certainly accept it.
+
+Lint your changes with `ruff`:
+
+    $ uv run ruff check .
 
 Run [EpubCheck](https://github.com/IDPF/epubcheck) on epubs you generate to make sure they're not breaking.

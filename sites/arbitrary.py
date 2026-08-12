@@ -1,12 +1,12 @@
 #!/usr/bin/python
 
 import logging
-import attr
+from attrs import define
 import datetime
 import json
 import re
 import os.path
-from . import register, Site, Section, Chapter
+from . import register, Site, Section, Chapter, SiteException
 
 logger = logging.getLogger(__name__)
 
@@ -24,23 +24,23 @@ Example JSON:
 """
 
 
-@attr.s
+@define
 class SiteDefinition:
-    url = attr.ib()
-    title = attr.ib()
-    author = attr.ib()
-    content_selector = attr.ib()
+    url: str
+    title: str
+    author: str
+    content_selector: str
     # If present, find something within `content` to use a chapter title; if not found, the link text to it will be used
-    content_title_selector = attr.ib(default=False)
+    content_title_selector: str|None = None
     # If present, find a specific element in the `content` to be the chapter text
-    content_text_selector = attr.ib(default=False)
+    content_text_selector: str|None = None
     # If present, it looks for chapters linked from `url`. If not, it assumes `url` points to a chapter.
-    chapter_selector = attr.ib(default=False)
+    chapter_selector: str|None = None
     # If present, use to find a link to the next content page (only used if not using chapter_selector)
-    next_selector = attr.ib(default=False)
+    next_selector: str|None = None
     # If present, use to filter out content that matches the selector
-    filter_selector = attr.ib(default=False)
-    cover_url = attr.ib(default='')
+    filter_selector: str|None = None
+    cover_url: str = ''
 
 
 @register
@@ -65,8 +65,7 @@ class Arbitrary(Site):
         )
 
         if definition.chapter_selector:
-            soup = self._soup(definition.url)
-            base = soup.head.base and soup.head.base.get('href') or False
+            soup, base = self._soup(definition.url)
             for chapter_link in soup.select(definition.chapter_selector):
                 chapter_url = str(chapter_link.get('href'))
                 if base:
@@ -77,32 +76,45 @@ class Arbitrary(Site):
         else:
             # set of already processed urls. Stored to detect loops.
             found_content_urls = set()
-            content_url = definition.url
-            while content_url and content_url not in found_content_urls:
+            content_urls = [definition.url]
+
+            def process_content_url(content_url):
+                if content_url in found_content_urls:
+                    return None
                 found_content_urls.add(content_url)
                 for chapter in self._chapter(content_url, definition):
                     story.add(chapter)
-                if definition.next_selector:
-                    soup = self._soup(content_url)
-                    base = soup.head.base and soup.head.base.get('href') or False
+                return content_url
+
+            while content_urls:
+                for temp_url in content_urls:
+                    # stop inner loop once a new link is found
+                    if content_url := process_content_url(temp_url):
+                        break
+                # reset url list
+                content_urls = []
+                if content_url and definition.next_selector:
+                    soup, base = self._soup(content_url)
                     next_link = soup.select(definition.next_selector)
                     if next_link:
-                        next_link_url = str(next_link[0].get('href'))
-                        next_link_url = next_link_url.replace("www.reddit.com", "old.reddit.com")
-                        next_link_url = next_link_url.replace("redd.it", "old.reddit.com")
-                        if base:
-                            next_link_url = self._join_url(base, next_link_url)
-                        content_url = self._join_url(content_url, next_link_url)
-                    else:
-                        content_url = False
-                else:
-                    content_url = False
+                        for next_link_item in next_link:
+                            next_link_url = str(next_link_item.get('href'))
+                            next_link_url = next_link_url.replace("www.reddit.com", "old.reddit.com")
+                            next_link_url = next_link_url.replace("redd.it", "old.reddit.com")
+                            if base:
+                                next_link_url = self._join_url(base, next_link_url)
+                            content_urls.append(self._join_url(content_url, next_link_url))
+
+        if not story:
+            raise SiteException("No story content found; check the content selectors")
+
+        self._finalize(story)
 
         return story
 
-    def _chapter(self, url, definition, title=False):
+    def _chapter(self, url, definition, title=None):
         logger.info("Extracting chapter @ %s", url)
-        soup = self._soup(url)
+        soup, base = self._soup(url)
 
         chapters = []
 
@@ -132,13 +144,13 @@ class Arbitrary(Site):
             # TODO: consider `'\n'.join(map(str, content.contents))`
             content.name = 'div'
 
-            self._clean(content)
+            self._clean(content, base)
 
             chapters.append(Chapter(
                 title=title,
-                contents=content.prettify(),
+                contents=self._soup_contents(content),
                 # TODO: better date detection
-                date=datetime.datetime.now(),
+                date=datetime.datetime.now()
             ))
 
         return chapters

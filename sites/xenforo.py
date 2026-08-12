@@ -4,9 +4,9 @@ import datetime
 import re
 import logging
 import requests_cache
-from bs4 import BeautifulSoup
 
-from . import register, Site, SiteException, SiteSpecificOption, Section, Chapter
+from . import Site, SiteException, SiteSpecificOption, Section, Chapter
+import mintotp
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +27,10 @@ class XenForo(Site):
                 help="If true, the post marked as an index will be included as a chapter."
             ),
             SiteSpecificOption(
-                'skip_spoilers',
-                '--skip-spoilers/--include-spoilers',
-                default=False,
-                help="If true, do not transcribe any tags that are marked as a spoiler."
+                'include_tallies',
+                '--include-tallies/--no-include-tallies',
+                default=True,
+                help="If false, embedded vote tallies will be stripped"
             ),
             SiteSpecificOption(
                 'offset',
@@ -44,7 +44,18 @@ class XenForo(Site):
                 type=int,
                 help="The chapter to end at at in the chapter marks."
             ),
+            SiteSpecificOption(
+                'filter',
+                '--filter',
+                type=str,
+                default=False,
+                help="If provided, a pattern to match in chapter titles."
+            ),
         ]
+
+    @classmethod
+    def get_default_options(cls):
+        return {**super().get_default_options(), 'spoilers': 'inline'}
 
     @classmethod
     def matches(cls, url):
@@ -62,8 +73,9 @@ class XenForo(Site):
 
     def login(self, login_details):
         with requests_cache.disabled():
+            # Can't just pass this url to _soup because I need the cookies later
             login = self.session.get(self.siteurl('login/'))
-            soup = BeautifulSoup(login.text, 'html5lib')
+            soup, nobase = self._soup(login.text)
             post, action, method = self._form_data(soup.find(class_='p-body-content'))
             post['login'] = login_details[0]
             post['password'] = login_details[1]
@@ -73,15 +85,24 @@ class XenForo(Site):
                 self._join_url(login.url, action),
                 data=post, cookies=login.cookies
             )
-            if result.ok:
-                logger.info("Logged in as %s", login_details[0])
-            else:
-                logger.error("Failed to log in as %s", login_details[0])
+            if not result.ok:
+                return logger.error("Failed to log in as %s", login_details[0])
+            soup, nobase = self._soup(result.text)
+            if twofactor := soup.find('form', action="/login/two-step"):
+                if len(login_details) < 3:
+                    return logger.error("Failed to log in as %s; login requires 2FA secret", login_details[0])
+                post, action, method = self._form_data(twofactor)
+                post['code'] = mintotp.totp(login_details[2])
+                result = self.session.post(
+                    self._join_url(login.url, action),
+                    data=post, cookies=login.cookies
+                )
+                if not result.ok:
+                    return logger.error("Failed to log in as %s; 2FA failed", login_details[0])
+            logger.info("Logged in as %s", login_details[0])
 
     def extract(self, url):
-        soup = self._soup(url)
-
-        base = soup.head.base and soup.head.base.get('href') or url
+        soup, base = self._soup(url)
 
         story = self._base_story(soup)
 
@@ -111,7 +132,7 @@ class XenForo(Site):
             while reader_url:
                 reader_url = self._join_url(base, reader_url)
                 logger.info("Fetching chapters @ %s", reader_url)
-                reader_soup = self._soup(reader_url)
+                reader_soup, reader_base = self._soup(reader_url)
                 posts = self._posts_from_page(reader_soup)
 
                 for post in posts:
@@ -121,11 +142,13 @@ class XenForo(Site):
                     if self.options['limit'] and idx >= self.options['limit']:
                         continue
                     title = self._threadmark_title(post)
+                    if not self._chapter_title_allowed(title):
+                        continue
                     logger.info("Extracting chapter \"%s\"", title)
 
                     story.add(Chapter(
                         title=title,
-                        contents=self._clean_chapter(post, len(story) + 1),
+                        contents=self._clean_chapter(post, len(story) + 1, base),
                         date=self._post_date(post)
                     ))
 
@@ -144,13 +167,14 @@ class XenForo(Site):
             for idx, mark in enumerate(marks, 1):
                 href = self._join_url(base, mark.get('href'))
                 title = str(mark.string).strip()
+                if not self._chapter_title_allowed(title):
+                    continue
                 logger.info("Fetching chapter \"%s\" @ %s", title, href)
                 contents, post_date = self._chapter(href, idx)
                 chapter = Chapter(title=title, contents=contents, date=post_date)
                 story.add(chapter)
 
-        story.footnotes = self.footnotes
-        self.footnotes = []
+        self._finalize(story)
 
         return story
 
@@ -185,7 +209,7 @@ class XenForo(Site):
             return self._chapter_list_index(url)
 
     def _chapter_list_threadmarks(self, url):
-        soup = self._soup(url)
+        soup, base = self._soup(url)
 
         threadmarks_link = soup.find(class_="threadmarksTrigger", href=True)
         if not threadmarks_link:
@@ -198,8 +222,7 @@ class XenForo(Site):
             raise SiteException("No threadmarks")
 
         href = threadmarks_link.get('href')
-        base = soup.head.base.get('href')
-        soup = self._soup(base + href)
+        soup, base = self._soup(self._join_url(base, href))
 
         fetcher = soup.find(class_='ThreadmarkFetcher')
         while fetcher:
@@ -216,7 +239,7 @@ class XenForo(Site):
                 'category_id': fetcher.get('data-category-id'),
                 '_xfResponseType': 'json',
             }).json()
-            responseSoup = BeautifulSoup(response['templateHtml'], 'html5lib')
+            responseSoup, nobase = self._soup(response['templateHtml'])
             fetcher.replace_with(responseSoup)
             fetcher = soup.find(class_='ThreadmarkFetcher')
 
@@ -243,9 +266,9 @@ class XenForo(Site):
         return links
 
     def _chapter(self, url, chapterid):
-        post = self._post_from_url(url)
+        post, base = self._post_from_url(url)
 
-        return self._clean_chapter(post, chapterid), self._post_date(post)
+        return self._clean_chapter(post, chapterid, base), self._post_date(post)
 
     def _post_from_url(self, url):
         # URLs refer to specific posts, so get just that one
@@ -259,18 +282,18 @@ class XenForo(Site):
             # create a proper post-url, because threadmarks can sometimes
             # mess up page-wise with anchors
             url = self.siteurl(f'posts/{postid}/')
-        soup = self._soup(url, 'html5lib')
+        soup, base = self._soup(url)
 
         if postid:
-            return self._posts_from_page(soup, postid)
+            return self._posts_from_page(soup, postid), base
 
         # just the first one in the thread, then
-        return soup.find('li', class_='message')
+        return soup.find('li', class_='message'), base
 
     def _chapter_contents(self, post):
         return post.find('blockquote', class_='messageText')
 
-    def _clean_chapter(self, post, chapterid):
+    def _clean_chapter(self, post, chapterid, base):
         post = self._chapter_contents(post)
         post.name = 'div'
         # mostly, we want to remove colors because the Kindle is terrible at them
@@ -286,21 +309,37 @@ class XenForo(Site):
                 # TODO: more robust CSS parsing? This is very whitespace dependent, if nothing else.
                 if "font-family: 'Courier New'" in tag['style']:
                     tag.wrap(self._new_tag('code'))
+                    tag['style'] = tag['style'].replace("", '')
+                    tag['style'] = re.sub(r"font-family: 'Courier New';?", '', tag['style'])
                 if "text-decoration: strikethrough" in tag['style']:
                     tag.wrap(self._new_tag('strike'))
+                    tag['style'] = re.sub(r'text-decoration: strikethrough;?', '', tag['style'])
                 if "margin-left" in tag['style']:
                     continue
-                del tag['style']
         for tag in post.select('.quoteExpand, .bbCodeBlock-expandLink, .bbCodeBlock-shrinkLink'):
             tag.decompose()
-        #self._clean_spoilers(post, chapterid)
-        return post.prettify()
+        for tag in post.find_all('noscript'):
+            # TODO: strip the noscript from these?
+            # mostly this will be the lazyload images
+            tag.decompose()
+        for tag in post.select('img.lazyload[data-src]'):
+            tag['src'] = tag['data-url']
+            if tag['src'].startswith('proxy.php'):
+                tag['src'] = f"{self.domain}/{tag['src']}"
+        if not self.options['include_tallies']:
+            for tag in post.select('div.tally-block'):
+                tag.decompose()
+        self._clean(post, base)
+        self._clean_spoilers(post, chapterid)
+        return self._soup_contents(post)
 
     def _clean_spoilers(self, post, chapterid):
         # spoilers don't work well, so turn them into epub footnotes
         for spoiler in post.find_all(class_='ToggleTriggerAnchor'):
+            if self.options['spoilers'] == 'inline':
+                continue
             spoiler_title = spoiler.find(class_='SpoilerTitle')
-            if self.options['skip_spoilers']:
+            if self.options['spoilers'] == 'skip':
                 link = self._footnote(spoiler.find(class_='SpoilerTarget').extract(), chapterid)
                 if spoiler_title:
                     link.string = spoiler_title.get_text()
@@ -322,6 +361,11 @@ class XenForo(Site):
             return datetime.datetime.strptime(maybe_date['title'], "%b %d, %Y at %I:%M %p")
         raise SiteException("No date", maybe_date)
 
+    def _chapter_title_allowed(self, title):
+        if filter := self.options['filter']:
+            return re.search(filter, title, re.IGNORECASE)
+        return True
+
 
 class XenForoIndex(XenForo):
     @classmethod
@@ -332,13 +376,3 @@ class XenForoIndex(XenForo):
 
     def _chapter_list(self, url):
         return self._chapter_list_index(url)
-
-
-@register
-class AlternateHistory(XenForo):
-    domain = 'www.alternatehistory.com/forum'
-
-
-@register
-class AlternateHistoryIndex(AlternateHistory, XenForoIndex):
-    _key = "AlternateHistory"

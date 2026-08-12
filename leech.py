@@ -7,9 +7,10 @@ import logging
 import os
 import requests
 import requests_cache
-import sqlite3
 from click_default_group import DefaultGroup
 from functools import reduce
+from pathlib import Path
+from platformdirs import PlatformDirs
 
 import sites
 import ebook
@@ -18,6 +19,17 @@ __version__ = 2
 USER_AGENT = 'Leech/%s +http://davidlynch.org' % __version__
 
 logger = logging.getLogger(__name__)
+
+dirs = PlatformDirs('Leech', 'davidlynch.org', ensure_exists=True)
+
+
+def likely_paths(*paths):
+    yield Path('.')
+    modpath = Path(__file__).resolve().parent
+    if modpath.resolve() != Path('.').resolve():
+        yield modpath
+    for path in paths:
+        yield path
 
 
 def configure_logging(verbose):
@@ -33,43 +45,60 @@ def configure_logging(verbose):
         )
 
 
-def create_session(cache):
+def create_session(cache) -> requests_cache.CachedSession | requests.Session:
     if cache:
-        session = requests_cache.CachedSession('leech', expire_after=4 * 3600)
+        session = requests_cache.CachedSession('leech', expire_after=4 * 3600, use_temp=True, backend='sqlite')
+        logger.debug("CachedSession at %s", session.cache.db_path)
     else:
         session = requests.Session()
+        logger.debug("Uncached session")
 
     lwp_cookiejar = http.cookiejar.LWPCookieJar()
-    try:
-        lwp_cookiejar.load('leech.cookies', ignore_discard=True)
-    except Exception:
-        # This file is very much optional, so this log isn't really necessary
-        # logging.exception("Couldn't load cookies from leech.cookies")
-        pass
+    for directory in likely_paths(dirs.user_data_path):
+        if not os.path.exists(directory / 'leech.cookies'):
+            logger.debug("No leech.cookies present in %s", directory)
+            continue
+        try:
+            lwp_cookiejar.load(str(directory / 'leech.cookies'), ignore_discard=True)
+        except Exception:
+            # This file is very much optional, so this log isn't really necessary
+            logger.exception("Couldn't load cookies from leech.cookies in %s", dirs.user_data_path)
+        break
     session.cookies.update(lwp_cookiejar)
     session.headers.update({
-        'User-agent': USER_AGENT
+        'User-Agent': USER_AGENT,
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Accept': '*/*',  # this is essential for imgur
     })
     return session
 
 
 def load_on_disk_options(site):
-    try:
-        with open('leech.json') as store_file:
+    loaded = False
+    for directory in likely_paths(dirs.user_config_path):
+        if not os.path.exists(directory / 'leech.json'):
+            logger.debug("No leech.json present in %s", directory)
+            continue
+        logger.debug("Loading leech.json from %s", directory)
+        with open(directory / 'leech.json') as store_file:
             store = json.load(store_file)
             login = store.get('logins', {}).get(site.site_key(), False)
-            configured_site_options = store.get('site_options', {}).get(site.site_key(), {})
             cover_options = store.get('cover', {})
-            output_dir = store.get('output_dir', False)
-    except FileNotFoundError:
+            image_options = store.get('images', {})
+            consolidated_options = {
+                **{k: v for k, v in store.items() if k not in ('cover', 'images', 'logins')},
+                **store.get('site_options', {}).get(site.site_key(), {})
+            }
+        loaded = True
+        break
+    if not loaded:
         logger.info("Unable to locate leech.json. Continuing assuming it does not exist.")
         login = False
-        configured_site_options = {}
+        image_options = {}
         cover_options = {}
-        output_dir = False
-    if output_dir and 'output_dir' not in configured_site_options:
-        configured_site_options['output_dir'] = output_dir
-    return configured_site_options, login, cover_options
+        consolidated_options = {}
+    return consolidated_options, login, cover_options, image_options
 
 
 def create_options(site, site_options, unused_flags):
@@ -80,7 +109,7 @@ def create_options(site, site_options, unused_flags):
 
     flag_specified_site_options = site.interpret_site_specific_options(**unused_flags)
 
-    configured_site_options, login, cover_options = load_on_disk_options(site)
+    configured_site_options, login, cover_options, image_options = load_on_disk_options(site)
 
     overridden_site_options = json.loads(site_options)
 
@@ -88,10 +117,11 @@ def create_options(site, site_options, unused_flags):
     # and overridden, and flag-specified options together in that order.
     options = dict(
         list(default_site_options.items()) +
+        list(cover_options.items()) +
+        list(image_options.items()) +
         list(configured_site_options.items()) +
         list(overridden_site_options.items()) +
-        list(flag_specified_site_options.items()) +
-        list(cover_options.items())
+        list(flag_specified_site_options.items())
     )
     return options, login
 
@@ -103,15 +133,17 @@ def open_story(site, url, session, login, options):
     )
 
     if login:
+        logger.info("Attempting to log in as %s", login[0])
         handler.login(login)
 
     try:
         story = handler.extract(url)
     except sites.SiteException as e:
-        logger.error(e.args)
+        logger.error(e)
         return
     if not story:
-        raise Exception("Couldn't extract story")
+        logger.error("Couldn't extract story")
+        return
     return story
 
 
@@ -131,12 +163,8 @@ def cli():
 def flush(verbose):
     """Flushes the contents of the cache."""
     configure_logging(verbose)
-    requests_cache.install_cache('leech')
-    requests_cache.clear()
-
-    conn = sqlite3.connect('leech.sqlite')
-    conn.execute("VACUUM")
-    conn.close()
+    session = create_session(True)
+    session.cache.clear()
 
     logger.info("Flushed cache")
 
@@ -153,24 +181,46 @@ def flush(verbose):
     default=None,
     help='Directory to save generated ebooks'
 )
+@click.option(
+    '--user-agent',
+    default=None,
+    help='Custom user-agent header'
+)
 @click.option('--cache/--no-cache', default=True)
 @click.option('--normalize/--no-normalize', default=True, help="Whether to normalize strange unicode text")
 @click.option('--verbose', '-v', is_flag=True, help="Verbose debugging output")
 @site_specific_options  # Includes other click.options specific to sites
-def download(urls, site_options, cache, verbose, normalize, output_dir, **other_flags):
-    """Downloads a story and saves it on disk as a ebpub ebook."""
+def download(urls, site_options, cache, verbose, normalize, output_dir, user_agent, **other_flags):
+    """Downloads a story and saves it on disk as an epub ebook."""
     configure_logging(verbose)
     session = create_session(cache)
 
     for url in urls:
         site, url = sites.get(url)
         options, login = create_options(site, site_options, other_flags)
+        if UA := user_agent or options.get('user_agent'):
+            logger.debug('USER_AGENT overridden to "%s"', UA)
+            session.headers.update({'USER_AGENT': UA})
+        site_output_dir = Path(output_dir or options.get('output_dir', os.getcwd())).expanduser().resolve()
+        if not os.path.exists(site_output_dir):
+            logger.warning("output directory doesn't exist: %s", site_output_dir)
+            return
         story = open_story(site, url, session, login, options)
         if story:
             filename = ebook.generate_epub(
                 story, options,
+                image_options={
+                    'image_fetch': options.get('image_fetch', True),
+                    'image_format': options.get('image_format', 'jpeg'),
+                    'compress_images': options.get('compress_images', False),
+                    'max_image_size': options.get('max_image_size', 1_000_000),
+                    'always_convert_images': options.get('always_convert_images', False)
+                },
                 normalize=normalize,
-                output_dir=output_dir or options.get('output_dir', os.getcwd())
+                output_dir=site_output_dir,
+                allow_spaces=options.get('allow_spaces', False),
+                session=session,
+                parser=options.get('parser', 'lxml')
             )
             logger.info("File created: " + filename)
         else:
