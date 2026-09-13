@@ -128,7 +128,10 @@ class RoyalRoad(Site):
             elif self.options['spoilers'] == 'inline':
                 if spoiler_title:
                     new_spoiler.append(f"{spoiler_title}: ")
+                # Replace first: appending makes new_spoiler the parent.
+                spoiler.replace_with(new_spoiler)
                 new_spoiler.append(spoiler)
+                continue
             else:
                 link = self._footnote(spoiler, chapterid)
                 if spoiler_title:
