@@ -29,14 +29,11 @@ class Image:
     url: str
 
     def path(self):
-        return f"images/{hashlib.sha1(self.url.encode()).hexdigest()}.{self.ext()}"
-
-    def ext(self):
-        if self.url.startswith("data:image") and 'base64' in self.url:
-            head, base64data = self.url.split(',')
-            return str(head.split(';')[0].split('/')[1])
-        path = urlparse.urlparse(self.url).path
-        return os.path.splitext(path)[1]
+        # This is deliberately not leaving an extension, because the
+        # image-type isn't actually known here, and Amazon treats the
+        # extension as important when converting files via send-to-kindle,
+        # which messes with later format-conversion.
+        return f"images/{hashlib.sha1(self.url.encode()).hexdigest()}"
 
 
 @define
@@ -189,7 +186,7 @@ class Site:
     def _soup(self, url, method=None, delay=0, retry=3, retry_delay=10, **kw) -> tuple[BeautifulSoup, str]:
         if not method:
             method = self.options.get('parser', 'lxml')
-        if url.startswith('http://') or url.startswith('https://'):
+        if url.startswith(('http://', 'https://')):
             page = self.session.get(url, **kw)
             if not page:
                 if page.status_code == 403 and page.headers.get('Server', False) == 'cloudflare' and "captcha-bypass" in page.text:
@@ -461,4 +458,4 @@ def list_site_specific_options():
 modules = glob.glob(os.path.join(os.path.dirname(__file__), "*.py"))
 __all__ = [os.path.basename(f)[:-3] for f in modules if not f.startswith("__")]
 
-from . import *  # noqa
+from . import *

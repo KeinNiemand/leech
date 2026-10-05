@@ -8,7 +8,6 @@ import textwrap
 import requests
 import logging
 
-from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +87,7 @@ def get_image_from_url(
     max_image_size: int = 1_000_000,
     always_convert: bool = False,
     session: requests.Session = None
-) -> Tuple[bytes, str, str]:
+) -> tuple[bytes, str, str]:
     """
     Based on make_cover_from_url(), this function takes in the image url usually gotten from the `src` attribute of
     an image tag and returns the image data, the image format and the image mime type
@@ -102,46 +101,38 @@ def get_image_from_url(
     logger.info("Downloading image: %s", url)
     session = session or requests.Session()
     try:
+        imgdata = None
         if url.startswith("https://www.filepicker.io/api/"):
             logger.warning("Filepicker.io image detected, converting to Fiction.live image. This might fail.")
             url = f"https://cdn3.fiction.live/fp/{url.split('/')[-1]}?&quality=95"
-        elif url.startswith("https://cdn3.fiction.live/images/") or url.startswith("https://ddx5i92cqts4o.cloudfront.net/images/"):
+        elif url.startswith(("https://cdn3.fiction.live/images/", "https://ddx5i92cqts4o.cloudfront.net/images/")):
             logger.warning("Converting url to cdn6. This might fail.")
             url = f"https://cdn6.fiction.live/file/fictionlive/images/{url.split('/images/')[-1]}"
-        elif url.startswith("data:image") and 'base64' in url:
+
+        if url.startswith("data:image") and 'base64' in url:
             logger.info("Base64 image detected")
             head, base64data = url.split(',')
-            file_ext = str(head.split(';')[0].split('/')[1])
             imgdata = b64decode(base64data)
-            if compress_images:
-                if file_ext.lower() == "gif":
-                    logger.info("GIF images should not be compressed, skipping compression")
-                else:
-                    compressed_base64_image = compress_image(BytesIO(imgdata), max_image_size, file_ext)
-                    imgdata = PIL_Image_to_bytes(compressed_base64_image, file_ext)
+        else:
+            img = session.get(url, timeout=(6.01, 30))
+            imgdata = img.content
 
-            if file_ext.lower() not in ["jpg", "jpeg", "png", "gif"]:
-                logger.info(f"Image format {file_ext} not supported by EPUB2.0.1, converting to {image_format}")
-                return _convert_to_new_format(imgdata, image_format).read(), image_format.lower(), f"image/{image_format.lower()}"
-            return imgdata, file_ext, f"image/{file_ext}"
-
-        img = session.get(url, timeout=(6.01, 30))
-        image = BytesIO(img.content)
+        image = BytesIO(imgdata)
         image.seek(0)
-
         PIL_image = Image.open(image)
 
         current_format = str(PIL_image.format)
 
         if current_format.lower() == "gif":
-            PIL_image = Image.open(image)
             if PIL_image.info['version'] not in [b"GIF89a", "GIF89a"]:
                 PIL_image.info['version'] = b"GIF89a"
-            return PIL_Image_to_bytes(PIL_image, "GIF"), "gif", "image/gif"
-
-        if compress_images:
+            imgdata = PIL_Image_to_bytes(PIL_image, "GIF")
+        elif compress_images:
             PIL_image = compress_image(image, max_image_size, current_format)
 
+        if current_format.lower() not in ["jpg", "jpeg", "png", "gif"]:
+            logger.info(f"Image format {current_format} not supported by EPUB2.0.1, converting to {image_format}")
+            current_format = image_format
         if always_convert:
             current_format = image_format
 
@@ -199,7 +190,7 @@ def _safe_font(preferred, *args, **kwargs):
     for font in (preferred, "Helvetica", "FreeSans", "Arial"):
         try:
             return ImageFont.truetype(*args, font=font, **kwargs)
-        except IOError:
+        except OSError:
             pass
 
     # This is pretty terrible, but it'll work regardless of what fonts the
